@@ -1,26 +1,36 @@
 # Render Blueprint for Securo.
 #
-# Deploy: Render Dashboard -> New + -> Blueprint -> pick this repo. Render reads
-# this file and provisions everything below in one go.
+# Deploy: Render Dashboard -> New + -> Blueprint -> pick this repo.
+#
+# NOTE: this deployment was created via the Render CLI, so the live services
+# already exist. This file is kept in sync so the stack is reproducible.
+#
+# Live resources (Budgetflow workspace, free plan):
+#   securo-frontend  https://securo-frontend-trrt.onrender.com  (-> securo.opstintechnologies.com)
+#   securo-backend   https://securo-backend-zire.onrender.com   (health: /api/health)
+#   securo-mcp       https://securo-mcp-dn75.onrender.com       (health: /health, 43 MCP tools)
+#   securo-redis     Render Key Value
+#   Postgres         EXTERNAL (Supabase, session pooler ap-northeast-1) — not provisioned here
 #
 # Design notes (Free plan):
-#   * Only web services, Postgres and Key Value are free; no background workers,
-#     cron, private services or disks. Celery worker/beat are therefore omitted —
-#     bank sync / scheduled jobs stay inert until a paid plan is added.
+#   * No background workers / cron / private services / disks. Celery worker+beat
+#     are omitted: bank sync and scheduled jobs stay inert.
 #   * Free web services cannot receive private-network traffic, so the frontend
-#     proxies /api/ to the backend's PUBLIC *.onrender.com URL (see BACKEND_URL).
-#   * Free Postgres expires 30 days after creation. Move to a paid plan to keep it.
+#     proxies /api/ to the backend's PUBLIC *.onrender.com URL, and the backend
+#     reaches the MCP server over its public URL.
 #   * Migrations run from backend/scripts/render-entrypoint.sh on boot.
 
-databases:
-  - name: securo-db
-    plan: free
-    postgresMajorVersion: "16"
-    region: oregon
+envVarGroups:
+  # Shared by the backend and the MCP server: the JWT secret they use to talk
+  # to each other must match on both sides.
+  - name: securo-agents
+    envVars:
+      - key: AGENTS_ENABLED
+        value: "true"
+      - key: AGENTS_MCP_JWT_SECRET
+        generateValue: true
 
 services:
-  # Redis-compatible Key Value. Used for rate limiting now; a Celery broker if
-  # background workers are added later.
   - type: keyvalue
     name: securo-redis
     plan: free
@@ -41,17 +51,19 @@ services:
     healthCheckPath: /api/health
     dockerCommand: sh /app/scripts/render-entrypoint.sh
     envVars:
+      - fromGroup: securo-agents
       - key: SECRET_KEY
         generateValue: true
+      # External managed Postgres (Supabase session pooler). asyncpg driver.
       - key: DATABASE_URL
-        fromDatabase:
-          name: securo-db
-          property: connectionString
+        sync: false
       - key: REDIS_URL
         fromService:
           type: keyvalue
           name: securo-redis
           property: connectionString
+      - key: AGENTS_BUILTIN_MCP_URL
+        value: https://securo-mcp-dn75.onrender.com/mcp
       - key: FRONTEND_URL
         value: https://securo.opstintechnologies.com
       - key: DEBUG
@@ -62,7 +74,6 @@ services:
         value: Asia/Karachi
       - key: LOCAL_AUTH_ENABLED
         value: "true"
-      # Private instance: first admin is created via the /setup screen.
       - key: REGISTRATION_ENABLED
         value: "false"
       - key: TRUSTED_PROXY_HOPS
@@ -74,6 +85,23 @@ services:
       - key: WEBAUTHN_RP_NAME
         value: Securo
 
+  # Built-in MCP server: exposes the user's financial data as MCP tools that the
+  # in-app agent (and, with a token, external clients) can call.
+  - type: web
+    name: securo-mcp
+    runtime: docker
+    plan: free
+    region: oregon
+    branch: main
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    healthCheckPath: /health
+    dockerCommand: uvicorn mcp_server.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - fromGroup: securo-agents
+      - key: DATABASE_URL
+        sync: false
+
   - type: web
     name: securo-frontend
     runtime: docker
@@ -84,12 +112,10 @@ services:
     dockerContext: ./frontend
     healthCheckPath: /
     envVars:
-      # The nginx image listens on 8080; make Render route to that port.
       - key: PORT
         value: "8080"
-      # nginx proxies /api/ to the backend. Public URL because free web
-      # services cannot receive private-network traffic.
+      # nginx proxies /api/ to the backend's public URL.
       - key: BACKEND_URL
-        value: https://securo-backend.onrender.com
+        value: https://securo-backend-zire.onrender.com
       - key: NGINX_RESOLVER
         value: 1.1.1.1
