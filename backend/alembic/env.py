@@ -17,7 +17,10 @@ from app.agents.models import *  # noqa: F401,F403
 config = context.config
 settings = get_settings()
 
-config.set_main_option("sqlalchemy.url", settings.database_url)
+# configparser treats `%` as interpolation syntax, so a percent-encoded URL
+# (e.g. a password containing %23 / %40) raises "invalid interpolation syntax"
+# unless the `%` is doubled here. get_main_option / get_section decode it back.
+config.set_main_option("sqlalchemy.url", settings.database_url.replace("%", "%%"))
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
