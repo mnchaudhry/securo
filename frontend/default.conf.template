@@ -19,6 +19,10 @@ server {
         resolver ${NGINX_RESOLVER} valid=5s;
         set $upstream ${BACKEND_URL};
         proxy_pass $upstream;
+        # Send SNI when BACKEND_URL is https (e.g. a public *.onrender.com URL);
+        # ignored for plain http upstreams like Docker's http://backend:8000.
+        proxy_ssl_server_name on;
+        proxy_ssl_verify off;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -33,6 +37,8 @@ server {
         resolver ${NGINX_RESOLVER} valid=5s;
         set $upstream ${BACKEND_URL};
         proxy_pass $upstream;
+        proxy_ssl_server_name on;
+        proxy_ssl_verify off;
         proxy_read_timeout 300s;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
