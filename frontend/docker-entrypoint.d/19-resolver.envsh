@@ -11,3 +11,12 @@
 # leak into the entrypoint's own shell and change its semantics.
 : "${NGINX_RESOLVER:=${NGINX_LOCAL_RESOLVERS:-127.0.0.11}}"
 export NGINX_RESOLVER
+
+# Host header to send upstream. When the backend is reached over the public
+# internet (e.g. https://<svc>.onrender.com on Render), the edge routes purely by
+# Host, so forwarding the incoming $host (the frontend's) makes the request loop
+# straight back and Render answers 508 Loop Detected. Send the backend's own host
+# instead. Derived from BACKEND_URL so compose (http://backend:8000) and Render
+# (https://<svc>.onrender.com) both work with no extra configuration.
+: "${BACKEND_HOST:=$(printf '%s' "${BACKEND_URL:-}" | sed -E 's#^[a-zA-Z][a-zA-Z0-9+.-]*://##; s#/.*$##')}"
+export BACKEND_HOST
