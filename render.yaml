@@ -1,0 +1,95 @@
+# Render Blueprint for Securo.
+#
+# Deploy: Render Dashboard -> New + -> Blueprint -> pick this repo. Render reads
+# this file and provisions everything below in one go.
+#
+# Design notes (Free plan):
+#   * Only web services, Postgres and Key Value are free; no background workers,
+#     cron, private services or disks. Celery worker/beat are therefore omitted —
+#     bank sync / scheduled jobs stay inert until a paid plan is added.
+#   * Free web services cannot receive private-network traffic, so the frontend
+#     proxies /api/ to the backend's PUBLIC *.onrender.com URL (see BACKEND_URL).
+#   * Free Postgres expires 30 days after creation. Move to a paid plan to keep it.
+#   * Migrations run from backend/scripts/render-entrypoint.sh on boot.
+
+databases:
+  - name: securo-db
+    plan: free
+    postgresMajorVersion: "16"
+    region: oregon
+
+services:
+  # Redis-compatible Key Value. Used for rate limiting now; a Celery broker if
+  # background workers are added later.
+  - type: keyvalue
+    name: securo-redis
+    plan: free
+    region: oregon
+    maxmemoryPolicy: noeviction
+    ipAllowList:
+      - source: 0.0.0.0/0
+        description: internal use only
+
+  - type: web
+    name: securo-backend
+    runtime: docker
+    plan: free
+    region: oregon
+    branch: main
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    healthCheckPath: /api/health
+    dockerCommand: sh /app/scripts/render-entrypoint.sh
+    envVars:
+      - key: SECRET_KEY
+        generateValue: true
+      - key: DATABASE_URL
+        fromDatabase:
+          name: securo-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: securo-redis
+          property: connectionString
+      - key: FRONTEND_URL
+        value: https://securo.opstintechnologies.com
+      - key: DEBUG
+        value: "false"
+      - key: DEFAULT_CURRENCY
+        value: PKR
+      - key: TZ
+        value: Asia/Karachi
+      - key: LOCAL_AUTH_ENABLED
+        value: "true"
+      # Private instance: first admin is created via the /setup screen.
+      - key: REGISTRATION_ENABLED
+        value: "false"
+      - key: TRUSTED_PROXY_HOPS
+        value: "1"
+      - key: STORAGE_LOCAL_PATH
+        value: /app/data/attachments
+      - key: WEBAUTHN_RP_ID
+        value: opstintechnologies.com
+      - key: WEBAUTHN_RP_NAME
+        value: Securo
+
+  - type: web
+    name: securo-frontend
+    runtime: docker
+    plan: free
+    region: oregon
+    branch: main
+    dockerfilePath: ./frontend/Dockerfile
+    dockerContext: ./frontend
+    healthCheckPath: /
+    envVars:
+      # The nginx image listens on 8080; make Render route to that port.
+      - key: PORT
+        value: "8080"
+      # nginx proxies /api/ to the backend. Public URL because free web
+      # services cannot receive private-network traffic.
+      - key: BACKEND_URL
+        value: https://securo-backend.onrender.com
+      - key: NGINX_RESOLVER
+        value: 1.1.1.1
