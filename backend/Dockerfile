@@ -28,4 +28,8 @@ RUN pip install --no-cache-dir --no-deps -e .
 
 EXPOSE 8000
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Default command runs the platform entrypoint: it normalises DATABASE_URL for
+# the async driver, applies migrations (alembic upgrade head), then serves on
+# $PORT. Compose deployments override this with their own entrypoint/command, so
+# this only affects platforms that use the image's default command (e.g. Render).
+CMD ["sh", "/app/scripts/render-entrypoint.sh"]
